@@ -4,14 +4,15 @@ package main
 //1. create a backend server in one terminal: python3 -m http.server 8081
 //2. run the proxy in a different terminal: go run server.go
 //3. create an HTTP request from the client side to test it all out in a different terminal: curl http://localhost:8080\
-//4. to test the concurrency, you can send a burst of HTTP request at once: seq 1 50 | xargs -n1 -P50 curl -s http://localhost:8080 > /dev/null
+//4. to test the concurrency, you can send a burst of HTTP request at once: for ($i = 0; $i -lt 50; $i++) { curl.exe -s http://localhost:8080 | Out-Null }
+//5. to test the load balancing, create 3 backend servers on three different ports and then run the burst of HTTP requests
 //===================================================================================
 
 //List of things that have been finished:
 //1. Created a Reverse Proxy in Go that forads requests from clients to backend sevrer 
 //2. Editted it up so its now  a concurrent reverse proxy that can take in multiple requests at the same time, did that by imementing multi-threading with a worker pool (find right phasing for that)
 //3. implemented a Worker/Thread pool pattern, buffered channel queue, TCP netwokring and HTTP parsing in Go, 
-
+//4. Implmented a Round-Roboin algerithom for load balancing 
 import (
 	"bufio"
 	"fmt"
@@ -19,12 +20,18 @@ import (
 	"log"
 	"net"
 	"strings"
+	"sync/atomic"
+	"time"
 )
 
 // BackendServer represents a server we're proxying traffic to
 type BackendServer struct{
 	Host string
 	Port string	
+	Healthy bool
+	ActiveConnections int32
+	FailureCount int32
+
 }
 
 //this is a struct, which is a custom data type that groups related fields like a class, 
@@ -37,14 +44,18 @@ type Request struct{
 	Body []byte //a byte slice, which is a dynamic array of bytes 
 }
 
-var backend = BackendServer{
-	Host: "localhost",
-	Port: "8081",
+var backends = []BackendServer{
+	{Host: "localhost", Port: "8081", Healthy: true},
+	{Host: "localhost", Port: "8082", Healthy: true},
+	{Host: "localhost", Port: "8083", Healthy: true},
 }
+
+var counter uint64
 
 func main() {
 
-	//opening a TCP socket on port 8080
+	//opening a TCP socket on port 8080 for this specific proxy server to listen for incoming connections 
+	// from clients, and it returns a listener object that we can use to accept connections
 	listener, error := net.Listen("tcp", ":8080")
 
 	if error != nil{
@@ -56,7 +67,7 @@ func main() {
 	defer listener.Close()
 
 	fmt.Println("Proxy listening on :8080")
-	fmt.Printf("Forwarding to backend at %s:%s\n", backend.Host, backend.Port)
+	//fmt.Printf("Forwarding to backend at %s:%s\n", backend.Host, backend.Port)
 
 	//net.Conn is Go's interface for representing a network connection, it provides methods for reading and writing data over the connection
 	//this ius a channel in GO, which is a buffered (limited/offiucial size) deque in python that can do synchronization 
@@ -119,7 +130,7 @@ func handleConnection(clientConn net.Conn){
 		return
 	}
 
-	fmt.Printf("Recieved %s %s (Host: %s)\n", request.Method, request.URL, request.Host)
+	fmt.Printf("Recieved  %s %s (Host: %s)\n", request.Method, request.URL, request.Host)
 
 	response, error := forwardRequestToBackend(rawRequest)
 	if error != nil{
@@ -199,6 +210,13 @@ func parseHTTPRequest(conn net.Conn) (*Request, []byte, error){
 
 func forwardRequestToBackend(rawRequest []byte) ([]byte, error){
 
+	backend := getNextBackend()
+	if backend == nil{
+		return nil, fmt.Errorf("No healthy backends available")
+	}
+	log.Printf("Forwarding to backend %s:%s", backend.Host, backend.Port)
+
+
 	//creates a TCP connection to the backend server
 	//uses ther Host name (IP address or domain name that DNS translates to IP) and Port (process or service on that machine to talk to)
 	// to make the connectionm
@@ -223,4 +241,40 @@ func forwardRequestToBackend(rawRequest []byte) ([]byte, error){
 	return response, nil 
 
 
+}
+
+//implements the Round Robin ALgo to select the next backend server to forward the request to (Load Balancer)
+func getNextBackend() *BackendServer{
+
+	for i := 0; i<len(backends); i++ {
+
+		index := atomic.AddUint64(&counter,1) % uint64(len(backends))
+
+		if backends[index].Healthy {
+			return &backends[index]
+		}
+
+	}
+	return nil
+}
+
+func startHealthChecks(){
+	//starts a goroutine
+	go func(){
+		for{
+			for _, b := range backends{
+				//this is the health check, it opens a TCP connection to the backend 
+				//it takjes the protocall, address, and a timeout duration fo rit to wait for a connection 
+				connection, error := net.DialTimeout("tcp", b.Host + ":" + b.Port, 2*time.Second)
+				if error != nil{
+					b.Healthy = false 
+					log.Printf("Backend %s:%s is down", b.Host, b.Port)
+				}else{
+					b.Healthy = true
+					connection.Close()
+				}
+			}
+			time.Sleep(10 * time.Second)
+		}
+	}()
 }
