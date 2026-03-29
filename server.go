@@ -6,6 +6,8 @@ package main
 //3. create an HTTP request from the client side to test it all out in a different terminal: curl http://localhost:8080\
 //4. to test the concurrency, you can send a burst of HTTP request at once: for ($i = 0; $i -lt 50; $i++) { curl.exe -s http://localhost:8080 | Out-Null }
 //5. to test the load balancing, create 3 backend servers on three different ports and then run the burst of HTTP requests
+//6 Now with docker, the above step is not needed. Run docker-compose up --build and then send the burst of HTTP requests to the proxy
+//to test the health checks, run docker compose stop backend2 and u will see the load balancer and health checks at work 
 //===================================================================================
 
 //List of things that have been finished:
@@ -44,19 +46,30 @@ type Request struct{
 	Body []byte //a byte slice, which is a dynamic array of bytes 
 }
 
+// var backends = []BackendServer{
+// 	{Host: "localhost", Port: "8080", Healthy: true},
+// 	{Host: "localhost", Port: "8080", Healthy: true},
+// 	{Host: "localhost", Port: "8080", Healthy: true},
+// }
+
 var backends = []BackendServer{
-	{Host: "localhost", Port: "8081", Healthy: true},
-	{Host: "localhost", Port: "8082", Healthy: true},
-	{Host: "localhost", Port: "8083", Healthy: true},
+	{Host: "backend1", Port: "8080", Healthy: true},
+	{Host: "backend2", Port: "8080", Healthy: true},
+	{Host: "backend3", Port: "8080", Healthy: true},
 }
 
 var counter uint64
+var cache *Cache
 
 func main() {
+
+	cache = NewCache(100)
+	cache.StartCleanup(60*time.Second)
 
 	//opening a TCP socket on port 8080 for this specific proxy server to listen for incoming connections 
 	// from clients, and it returns a listener object that we can use to accept connections
 	listener, error := net.Listen("tcp", ":8080")
+
 
 	if error != nil{
 		log.Fatalf("Error starting server: %v", error)
@@ -95,6 +108,9 @@ func main() {
 			}
 		}()//this is used to call the function right away
 	}
+
+	startHealthChecks()
+
 
 	for {
 		//.Accept() waits for a client to connect and once they do, it returns a net.Conn object representing the connection
@@ -137,6 +153,21 @@ func handleConnection(clientConn net.Conn){
 		log.Println("Failed to forward to backend:", error)
 		clientConn.Write([]byte("HTTP/1.1 502 Bad Gateway\r\n\r\nBackend unavailable"))
 		return
+	}
+
+	if request.Method == "GET"{
+		if cached, ok := cache.Get(request.URL); ok{
+			log.Printf("Cache hit for %s", request.URL)
+			clientConn.Write(cached)
+			cache.Stats()
+			return
+		} else{
+			cache.Put(request.URL, response, 30*time.Second)
+			log.Printf("Cache MISS but PUT: %s", request.URL)
+
+		}
+		//log.Printf("Cache MISS: %s", request.URL)
+
 	}
 	//sends the response back to the client
 	clientConn.Write(response)
@@ -261,16 +292,17 @@ func getNextBackend() *BackendServer{
 func startHealthChecks(){
 	//starts a goroutine
 	go func(){
+		time.Sleep(2 * time.Second)
 		for{
-			for _, b := range backends{
+			for index := range backends{
 				//this is the health check, it opens a TCP connection to the backend 
 				//it takjes the protocall, address, and a timeout duration fo rit to wait for a connection 
-				connection, error := net.DialTimeout("tcp", b.Host + ":" + b.Port, 2*time.Second)
+				connection, error := net.DialTimeout("tcp", backends[index].Host + ":" + backends[index].Port, 2*time.Second)
 				if error != nil{
-					b.Healthy = false 
-					log.Printf("Backend %s:%s is down", b.Host, b.Port)
+					backends[index].Healthy = false 
+					log.Printf("Backend %s:%s is down", backends[index].Host, backends[index].Port)
 				}else{
-					b.Healthy = true
+					backends[index].Healthy = true
 					connection.Close()
 				}
 			}
