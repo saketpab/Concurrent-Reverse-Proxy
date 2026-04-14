@@ -1,6 +1,6 @@
 # Stage 1: Build
 #starts a new Docker image 
-FROM golang:1.23 AS builder 
+FROM golang:1.24 AS builder 
 
 #sets the workiing directory inside the container to /app
 WORKDIR /app

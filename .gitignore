@@ -27,6 +27,15 @@ go.work.sum
 # env file
 .env
 
+#TLS stuff
+#this is the certificate file, it contains the public key (server's identity that is safe to share) and some other information about the certificate
+cert.pem 
+#this is a secret key used to prove my identity and encrypt/decrypt data, this should never be shared
+key.pem
+
+#Process: Client connects to server -> server sends cert.pem, client verifies it -> server proves identity with key.pem
+# -> secure connect is established 
+
 # Editor/IDE
 # .idea/
 # .vscode/

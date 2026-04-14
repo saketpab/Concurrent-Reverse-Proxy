@@ -7,6 +7,10 @@ services:
     #take traffic on my 8080 port and send it to the container's 8080 port
     ports:
       - "8080:8080"
+      - "8443:8443"
+    volumes:
+      - ./cert.pem:/app/cert.pem
+      - ./key.pem:/app/key.pem
     #these are host names, and DOcker has its own DNS to translate it inot what it needs to be
     #this says start these things before starting the proxy container, and also if any of these containers stop, stop the proxy container as well
     depends_on:
@@ -18,11 +22,31 @@ services:
   backend1:
     image: python:3.11-slim
     command: python3 -m http.server 8080
+    volumes: #a way for the container to access files on the host machine, this says take the testFiles directory on the host and mount it to /app/testFiles in the container
+      - ./testFiles:/app/testFiles
+    working_dir: /app
 
   backend2:
     image: python:3.11-slim
     command: python3 -m http.server 8080
+    volumes:
+      - ./testFiles:/app/testFiles
+    working_dir: /app
+
 
   backend3:
     image: python:3.11-slim
     command: python3 -m http.server 8080
+    volumes:
+      - ./testFiles:/app/testFiles
+    working_dir: /app
+
+  grpc-backend:
+    build:
+      context: .
+      dockerfile: grpc_backend/Dockerfile
+    ports:
+      - "9091:9091"
+    volumes:
+    - ./cert.pem:/app/cert.pem
+    - ./key.pem:/app/key.pem

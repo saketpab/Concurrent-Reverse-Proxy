@@ -1,0 +1,18 @@
+syntax = "proto3";
+
+package proxy;
+
+option go_package = "concurrent-reverse-proxy/gen/pb-gp/proto";
+
+service BackendService {
+    rpc Process (Request) returns (Response);
+}
+
+message Request {
+    string body = 1;
+}
+
+message Response {
+    string result = 1;
+    int32  status = 2;
+}
