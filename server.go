@@ -27,15 +27,16 @@ package main
 //7. Added TLS support for secure HTTPS connections, and also added a HTTP to HTTPS redirection
 import (
 	"bufio"
+	"bytes"
 	"crypto/tls"
 	"fmt"
 	"io"
 	"log"
 	"net"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
-	"bytes"
 )
 
 // BackendServer represents a server we're proxying traffic to
@@ -200,8 +201,9 @@ func handleConnection(clientConn net.Conn) {
 
 	reader := bufio.NewReader(clientConn)
 	data, _ := reader.Peek(1024)
+
 	//checking if the request requires gRPC
-	if isgRPC(data){
+	if isgRPC(data) {
 		log.Printf("Detected gRPC request, forwarding to gRPC backend")
 		forwardTogRPCBackend(clientConn, reader)
 		return
@@ -215,8 +217,6 @@ func handleConnection(clientConn net.Conn) {
 	}
 
 	fmt.Printf("Recieved  %s %s (Host: %s)\n", request.Method, request.URL, request.Host)
-
-	
 
 	//checks the cache
 	if request.Method == "GET" {
@@ -244,7 +244,6 @@ func handleConnection(clientConn net.Conn) {
 	//sends the response back to the client
 	clientConn.Write(response)
 	fmt.Println("Response forwarded back to client")
-
 
 }
 
@@ -359,28 +358,43 @@ func getNextBackend() *BackendServer {
 	return nil
 }
 
-//if the bytes contain application/grpc, then its gRPC
-func isgRPC(data []byte) bool{
-	
-	return bytes.Contains(data, []byte("application/grpc"))
+var http2Preface = []byte("PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n")
+
+// if the bytes contain application/grpc, then its gRPC
+func isgRPC(data []byte) bool {
+
+	return bytes.HasPrefix(data, http2Preface)
+
 }
 
-func forwardTogRPCBackend(clientConn net.Conn, reader *bufio.Reader){
+func forwardTogRPCBackend(clientConn net.Conn, reader *bufio.Reader) {
 
-	backendConn, error := net.Dial("tcp", "grpc_backend:9091")
+	backendConn, error := net.Dial("tcp", "grpc-backend:9091")
 	if error != nil {
 		log.Printf("Failed to connect to gRPC backend: %v", error)
 		return
 	}
 	defer backendConn.Close()
 
-	go func(){
+	var wg sync.WaitGroup
+	wg.Add(2) // we have two goroutines to wait for
+
+	// client → backend
+	go func() {
+		defer wg.Done()
 		io.Copy(backendConn, clientConn)
 	}()
 
+	// backend → client
+	go func() {
+		defer wg.Done()
+		io.Copy(clientConn, backendConn)
+	}()
 	//reads chuckns from the right one to the left one, and then sends it back to the client, this is how we can forward gRPC requests without needing to parse them
 	//we have the connection made both ways to the client and the backend, so we can just copy data between them without needing to understand the content of the data, which is important for gRPC because its a binary protocol and not human readable like HTTP
-	io.Copy(clientConn, backendConn)
+
+	wg.Wait() // blocks here until btoh directions are done
+
 	log.Println("gRPC request forwarded and response sent back to client")
 }
 

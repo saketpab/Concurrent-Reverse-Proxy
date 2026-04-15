@@ -6,7 +6,7 @@ import (
 	"log"
 	"net"
 
-	pb "concurrent-reverse-proxy/proto"
+	pb "concurrent-reverse-proxy/gen/pb-go/proto"
 	"google.golang.org/grpc"
 )
 //there is alreadya  Porcess method, but methods defined on the struct (like we have in Process) will always overwirte inherited methods
@@ -36,7 +36,7 @@ func main(){
 	//hooks my methods to the sewrvr
 	pb.RegisterBackendServiceServer(grpcServer, &server{})
 
-	log.Println("gRPC backend listening on :9001")
+	log.Println("gRPC backend listening on :9091")
 	if err := grpcServer.Serve(listener); err != nil {
 	log.Fatal("Failed to serve:", err)
 	}
